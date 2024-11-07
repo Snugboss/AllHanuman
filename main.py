@@ -36,11 +36,11 @@ logging.basicConfig(
 
 class LoopingStreamManager:
     def __init__(self):
-        self.youtube_stream_key = "YOUR_YOUTUBE_STREAM_KEY"  # Replace with your YouTube stream key
+        self.youtube_stream_key = "t5jb-44zm-319x-0y4e-b1j8"  # Replace with your YouTube stream key
         self.video_paths = [  # List of video paths or URLs
-            "path_to_video1.mp4",
-            "path_to_video2.mp4",
-            "path_to_video3.mp4",
+        "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0000.mp4",
+        "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0001.mp4",
+        "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0002.mp4",
             # Add more video paths as needed
         ]
         self.current_process = None
