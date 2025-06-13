@@ -1,146 +1,116 @@
 import os
-import time
-import subprocess
-import logging
-from datetime import datetime
-import requests
-from threading import Thread
-import signal
 import sys
+import time
+import logging
+import ffmpeg
+import imageio_ffmpeg
 
-# Configure logging
+# --- Configuration ---
+# Configure logging for clear output
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('stream_log.txt'),
-        logging.StreamHandler()
+        logging.FileHandler('streaming.log'),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 
-class StreamManager:
-    def __init__(self):
-        self.youtube_stream_key = "cr8p-6zjj-xeux-4cxa-fe5x"
-        self.video_paths = [
-            "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0000.mp4",
-            "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0001.mp4",
-            "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0002.mp4",
-        ]
-        self.current_process = None
-        self.is_running = True
-        self.setup_signal_handlers()
+# List of video URLs to stream
+VIDEO_URLS = [
+    "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0000.mp4",
+    "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0001.mp4",
+    "https://hanuman.s3.us-south.cloud-object-storage.appdomain.cloud/0002.mp4",
+]
 
-    def setup_signal_handlers(self):
-        signal.signal(signal.SIGINT, self.handle_shutdown)
-        signal.signal(signal.SIGTERM, self.handle_shutdown)
+# Get YouTube stream key from environment variable or use a default
+YOUTUBE_STREAM_KEY = os.getenv("YOUTUBE_STREAM_KEY", "cr8p-6zjj-xeux-4cxa-fe5x")
 
-    def handle_shutdown(self, signum, frame):
-        logging.info("Received shutdown signal. Cleaning up...")
-        self.is_running = False
-        if self.current_process:
-            self.current_process.terminate()
-        sys.exit(0)
+def get_ffmpeg_executable():
+    """
+    Gets the path to the ffmpeg executable downloaded by imageio-ffmpeg.
+    This is the key to making this a self-contained Python solution.
+    """
+    try:
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        logging.info(f"Found FFmpeg executable at: {ffmpeg_path}")
+        return ffmpeg_path
+    except Exception as e:
+        logging.critical(f"Could not get FFmpeg executable path from imageio-ffmpeg: {e}")
+        logging.critical("Please ensure 'imageio-ffmpeg' is installed correctly (`pip install imageio-ffmpeg`).")
+        return None
 
-    def check_internet_connection(self):
-        try:
-            requests.get("https://www.google.com", timeout=5)
-            return True
-        except requests.RequestException:
-            return False
-
-    def verify_video_url(self, url):
-        try:
-            response = requests.head(url, timeout=5)
-            return response.status_code == 200
-        except requests.RequestException:
-            return False
-
-    def stream_video(self, video_path):
-        try:
-            if not self.verify_video_url(video_path):
-                logging.error(f"Video file not accessible: {video_path}")
-                return False
-
-            ffmpeg_command = [
-                'ffmpeg',
-                '-re',                     # Read input at native frame rate
-                '-i', video_path,          # Input file
-                '-c:v', 'libx264',         # Video codec
-                '-preset', 'veryfast',     # Encoding preset
-                '-b:v', '3000k',           # Video bitrate
-                '-maxrate', '3000k',       # Maximum bitrate
-                '-bufsize', '6000k',       # Buffer size
-                '-pix_fmt', 'yuv420p',     # Pixel format
-                '-g', '50',                # Keyframe interval
-                '-c:a', 'aac',             # Audio codec
-                '-b:a', '192k',            # Audio bitrate
-                '-ar', '44100',            # Audio sample rate
-                '-f', 'flv',               # Output format
-                f'rtmp://a.rtmp.youtube.com/live2/{self.youtube_stream_key}'
-            ]
-
-            self.current_process = subprocess.Popen(
-                ffmpeg_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-
-            self.current_process.wait()
-            return self.current_process.returncode == 0
-
-        except Exception as e:
-            logging.error(f"Error streaming video: {str(e)}")
-            return False
-
-    def run_stream_loop(self):
-        while self.is_running:
-            if not self.check_internet_connection():
-                logging.warning("No internet connection. Retrying in 30 seconds...")
-                time.sleep(30)
-                continue
-
-            for video_path in self.video_paths:
-                if not self.is_running:
-                    break
-
-                logging.info(f"Starting stream for: {video_path}")
-                success = self.stream_video(video_path)
-
-                if not success:
-                    logging.warning(f"Stream failed for {video_path}. Retrying in 10 seconds...")
-                    time.sleep(10)
+def stream_videos(video_urls, stream_key, ffmpeg_path):
+    """
+    Streams a list of videos to YouTube in a loop using ffmpeg-python,
+    explicitly specifying the path to the ffmpeg executable.
+    """
+    if not stream_key or stream_key == "cr8p-6zjj-xeux-4cxa-fe5x":
+        logging.warning("Using a hardcoded or default stream key.")
+    
+    rtmp_url = f'rtmp://a.rtmp.youtube.com/live2/{stream_key}'
+    
+    while True:
+        for video_url in video_urls:
+            logging.info(f"Starting stream for video: {video_url}")
+            try:
+                # Build the ffmpeg command using ffmpeg-python
+                process = (
+                    ffmpeg
+                    .input(video_url, re=None)
+                    .output(
+                        rtmp_url,
+                        format='flv',
+                        vcodec='libx264',
+                        preset='veryfast',
+                        video_bitrate='3000k',
+                        acodec='aac',
+                        audio_bitrate='192k',
+                        # Crucial parameters for stable streaming
+                        reconnect=1,
+                        reconnect_at_eof=1,
+                        reconnect_streamed=1,
+                        reconnect_delay_max=5
+                    )
+                    # Use run_async to manage the process and get logs
+                    .run_async(cmd=ffmpeg_path, pipe_stdout=True, pipe_stderr=True)
+                )
+                
+                # Log ffmpeg's output in real-time
+                stdout, stderr = process.communicate()
+                
+                if process.returncode == 0:
+                    logging.info(f"Finished streaming successfully: {video_url}")
                 else:
-                    logging.info(f"Stream completed for {video_path}")
-                    time.sleep(5)  # Brief pause between videos
+                    logging.error(f"Streaming failed for {video_url} with return code: {process.returncode}")
+                    # Decode stderr to see the actual error from ffmpeg
+                    error_message = stderr.decode('utf-8', errors='ignore')
+                    logging.error(f"FFmpeg error output:\n{error_message}")
 
-    def start(self):
-        logging.info("Starting stream manager...")
+            except ffmpeg.Error as e:
+                logging.error(f"An ffmpeg.Error occurred for {video_url}: {e}")
+                error_message = e.stderr.decode('utf-8', errors='ignore') if e.stderr else "No stderr."
+                logging.error(f"FFmpeg stderr:\n{error_message}")
+            except Exception as e:
+                logging.error(f"An unexpected error occurred while streaming {video_url}: {e}")
 
-        # Start the main streaming loop in a separate thread
-        stream_thread = Thread(target=self.run_stream_loop)
-        stream_thread.daemon = True
-        stream_thread.start()
+            logging.info("Waiting 7 seconds before the next video...")
+            time.sleep(7)
 
-        # Keep the main thread alive with a lightweight loop
-        try:
-            while self.is_running:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            self.handle_shutdown(None, None)
+        logging.info("Completed a full loop of all videos. Restarting...")
 
 if __name__ == "__main__":
     try:
-        # Create a timestamp for the log file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        logging.info(f"Starting streaming session at {timestamp}")
-
-        manager = StreamManager()
-        manager.start()
+        logging.info("--- Starting YouTube Streaming Script ---")
+        ffmpeg_executable = get_ffmpeg_executable()
+        if ffmpeg_executable:
+            stream_videos(VIDEO_URLS, YOUTUBE_STREAM_KEY, ffmpeg_executable)
+        else:
+            logging.critical("Could not find FFmpeg. Exiting.")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        logging.info("\n--- Streaming stopped by user ---")
+        sys.exit(0)
     except Exception as e:
-        logging.error(f"Fatal error: {str(e)}")
+        logging.critical(f"A fatal, unhandled error occurred: {e}")
         sys.exit(1)
-            self.handle_shutdown(None, None)
-
-if __name__ == "__main__":
-    manager = LoopingStreamManager()
-    manager.start()
