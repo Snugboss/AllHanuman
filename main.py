@@ -24,7 +24,7 @@ VIDEO_URLS = [
 ]
 
 # Get YouTube stream key from environment variable or use a default
-YOUTUBE_STREAM_KEY = os.getenv("YOUTUBE_STREAM_KEY", "cr8p-6zjj-xeux-4cxa-fe5x")
+YOUTUBE_STREAM_KEY = os.getenv("YOUTUBE_STREAM_KEY", "jag4-c49f-8qx6-5mu5-9wg8")
 
 def get_ffmpeg_executable():
     """
